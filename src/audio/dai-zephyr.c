@@ -827,6 +827,12 @@ static int dai_get_dma_slot(struct dai_data *dd, struct comp_dev *dev, uint32_t 
 	return 0;
 }
 
+/*
+ * Samples the DMA moves per peripheral request. Matches the figure Linux uses
+ * for the same hardware (FSL_SAI_MAXBURST_TX/RX).
+ */
+#define DAI_ZEPHYR_DMA_MAXBURST_SAMPLES 6
+
 static int dai_set_sg_config(struct dai_data *dd, struct comp_dev *dev, uint32_t period_bytes,
 			     uint32_t period_count)
 {
@@ -952,10 +958,22 @@ static int dai_set_dma_config(struct dai_data *dd, struct comp_dev *dev)
 	dma_cfg->source_data_size = config->src_width;
 	dma_cfg->dest_data_size = config->dest_width;
 
-	if (config->burst_elems)
+	/*
+	 * Zephyr documents source_burst_length as the bytes moved per DMA
+	 * request, not the size of the peripheral FIFO. config->burst_elems
+	 * carries dai_get_fifo_depth() for most DAIs, so it cannot be passed
+	 * through: asking for a whole FIFO per request makes the engine take
+	 * more than the peripheral has when it raises that request.
+	 *
+	 * SOF's own drivers never use burst_elems raw either - imx/edma.c
+	 * halves it "to fill the FIFO to half its size" and imx/sdma.c applies
+	 * burst_elems * width / 8. Linux picks the burst first and derives the
+	 * peripheral watermark from it: fsl_sai uses FSL_SAI_MAXBURST of 6
+	 * words. Follow that and request a small, fixed number of samples.
+	 */
+	dma_cfg->source_burst_length = DAI_ZEPHYR_DMA_MAXBURST_SAMPLES * config->src_width;
+	if (config->burst_elems && dma_cfg->source_burst_length > config->burst_elems)
 		dma_cfg->source_burst_length = config->burst_elems;
-	else
-		dma_cfg->source_burst_length = 8;
 
 	dma_cfg->dest_burst_length = dma_cfg->source_burst_length;
 	dma_cfg->cyclic = config->cyclic;
